@@ -11,8 +11,10 @@ import sys
 import signal
 import time
 import pygame
+import json
 import threading
 from datetime import datetime
+import RPi.GPIO as GPIO
 
 from .alsa_config import parse_hw_device
 from .model import Playlist, Movie
@@ -20,15 +22,29 @@ from .playlist_builders import build_playlist_m3u
 from datetime import datetime
 import vlc
 
-# Basic video looper architecture:
-# (The following comments are just explanations and are not part of the code)
-
-# Load configuration and initialize pygame and display.
-# Load video player and file reader modules based on configuration.
-# Create a playlist of movies to play.
-# Main loop to play videos and listen for file changes.
-# Display OSD messages, handle keyboard shortcuts, and respond to signals.
-
+# Basic video looper architecure:
+#
+# - VideoLooper class contains all the main logic for running the looper program.
+#
+# - Almost all state is configured in a .ini config file which is required for
+#   loading and using the VideoLooper class.
+#
+# - VideoLooper has loose coupling with file reader and video player classes that
+#   are used to find movie files and play videos respectively.  The configuration
+#   defines which file reader and video player module will be loaded.
+#
+# - A file reader module needs to define at top level create_file_reader function
+#   that takes as a parameter a ConfigParser config object.  The function should
+#   return an instance of a file reader class.  See usb_drive.py and directory.py
+#   for the two provided file readers and their public interface.
+#
+# - Similarly a video player modules needs to define a top level create_player
+#   function that takes in configuration.  See omxplayer.py and hello_video.py
+#   for the two provided video players and their public interface.
+#
+# - Future file readers and video players can be provided and referenced in the
+#   config to extend the video player use to read from different file sources
+#   or use different video players.
 class VideoLooper:
 
     def __init__(self, config_path):
@@ -43,8 +59,12 @@ class VideoLooper:
         # Load other configuration values.
         self._osd = self._config.getboolean('video_looper', 'osd')
         self._is_random = self._config.getboolean('video_looper', 'is_random')
+        self._one_shot_playback = self._config.getboolean('video_looper', 'one_shot_playback')
+        self._play_on_startup = self._config.getboolean('video_looper', 'play_on_startup')
         self._resume_playlist = self._config.getboolean('video_looper', 'resume_playlist')
-        self._keyboard_control = self._config.getboolean('video_looper', 'keyboard_control')
+        self._keyboard_control = self._config.getboolean('control', 'keyboard_control')
+        self._keyboard_control_disabled_while_playback = self._config.getboolean('control', 'keyboard_control_disabled_while_playback')
+        self._gpio_control_disabled_while_playback = self._config.getboolean('control', 'gpio_control_disabled_while_playback')
         self._copyloader = self._config.getboolean('copymode', 'copyloader')
         # Get seconds for countdown from config
         self._countdown_time = self._config.getint('video_looper', 'countdown_time')
@@ -52,8 +72,9 @@ class VideoLooper:
         self._wait_time = self._config.getint('video_looper', 'wait_time')
         # Get time display settings
         self._datetime_display = self._config.getboolean('video_looper', 'datetime_display')
-        self._datetime_display_format = self._config.get('video_looper', 'datetime_display_format', raw=True)
-        # Parse string of 3 comma-separated values like "255, 255, 255" into
+        self._top_datetime_display_format = self._config.get('video_looper', 'top_datetime_display_format', raw=True)
+        self._bottom_datetime_display_format = self._config.get('video_looper', 'bottom_datetime_display_format', raw=True)
+        # Parse string of 3 comma separated values like "255, 255, 255" into
         # a list of ints for colors.
         self._bgcolor = list(map(int, self._config.get('video_looper', 'bgcolor')
                                              .translate(str.maketrans('','', ','))
@@ -86,9 +107,11 @@ class VideoLooper:
         # Set other static internal state.
         self._extensions = '|'.join(self._player.supported_extensions())
         self._small_font = pygame.font.Font(None, 50)
-        self._big_font = pygame.font.Font(None, 250)
-        self._running = True
-        self._playbackStopped = False
+        self._medium_font   = pygame.font.Font(None, 96)
+        self._big_font   = pygame.font.Font(None, 250)
+        self._running    = True
+        # set the inital playback state according to the startup setting.
+        self._playbackStopped = not self._play_on_startup
         # Used for not waiting the first time
         self._firstStart = True
 
@@ -97,6 +120,17 @@ class VideoLooper:
         if self._keyboard_control:
             self._keyboard_thread = threading.Thread(target=self._handle_keyboard_shortcuts, daemon=True)
             self._keyboard_thread.start()
+        
+        pinMapSetting = self._config.get('control', 'gpio_pin_map', raw=True)
+        if pinMapSetting:
+            try:
+                self._pinMap = json.loads("{"+pinMapSetting+"}")
+                self._gpio_setup()
+            except Exception as err:
+                self._pinMap = None
+                self._print("gpio_pin_map setting is not valid and/or error with GPIO setup")
+        else:
+            self._pinMap = None
 
     def _print(self, message):
         """Print message to standard output if console output is enabled."""
@@ -361,6 +395,34 @@ class VideoLooper:
         self._print('Playing previous video: {0}'.format(movie.path))
         self._player.play(movie.path, self._sound_vol)
 
+    def _handle_gpio_control(self, pin):
+        if self._pinMap == None:
+            return
+        
+        if self._gpio_control_disabled_while_playback and self._player.is_playing():
+            self._print(f'gpio control disabled while playback is running')
+            return
+        
+        action = self._pinMap[str(pin)]
+
+        self._print(f'pin {pin} triggered: {action}')
+        
+        if action in ['K_ESCAPE', 'K_k', 'K_s', 'K_SPACE', 'K_p', 'K_b', 'K_o', 'K_i']:
+            pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, action, None)))
+        else:
+            self._playlist.set_next(action)
+            self._player.stop(3)
+            self._playbackStopped = False
+    
+    def _gpio_setup(self):
+        if self._pinMap == None:
+            return
+        GPIO.setmode(GPIO.BOARD)
+        for pin in self._pinMap:
+            GPIO.setup(int(pin), GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            GPIO.add_event_detect(int(pin), GPIO.FALLING, callback=self._handle_gpio_control,  bouncetime=200) 
+            self._print("pin {} action set to: {}".format(pin, self._pinMap[pin]))
+        
     def run(self):
         """Run the video looper application."""
         # Start by creating a playlist.
@@ -393,6 +455,9 @@ class VideoLooper:
 
         # Clean up and exit.
         self._player.stop()
+        if self._pinMap:
+            GPIO.cleanup()
+            
         pygame.quit()
 
 if __name__ == '__main__':

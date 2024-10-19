@@ -48,11 +48,18 @@ class VLCPlayer:
                 f.write(self._subtitle_header)
                 f.write(movie.title)
             args.extend(['--sub-file', srt_path])
-
-        args.append(movie.filename)  # Add movie file path.
-
+        args.append(movie.target)  # Add movie file path.
         # Run VLC process and direct standard output to /dev/null.
+        # Establish input pipe for commands
         self._process = subprocess.Popen(args, stdout=open(os.devnull, 'wb'), close_fds=True)
+
+    def pause(self):
+        self.sendKey("p")
+    
+    def sendKey(self, key: str):
+        if self.is_playing():
+            self._process.stdin.write(key.encode())
+            self._process.stdin.flush()
 
     def is_playing(self):
         if self._process is None:
