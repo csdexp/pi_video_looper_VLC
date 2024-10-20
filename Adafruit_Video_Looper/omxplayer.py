@@ -34,7 +34,7 @@ class VLCPlayer:
         self.stop(3)  # Up to 3-second delay to stop the old player.
 
         # Assemble the list of arguments for VLC.
-        args = ['omxplayer']
+        args = ['vlc']
         args.extend(self._vlc_args)  # Add VLC arguments from config.
 
         if loop is None:
