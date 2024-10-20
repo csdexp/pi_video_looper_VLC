@@ -141,7 +141,7 @@ class VideoLooper:
     def _load_player(self):
         """Load the configured video player and return an instance of it."""
         # Load VLCPlayer instead of OMXPlayer
-        from .vlc_player import VLCPlayer
+        from .omxplayer import VLCPlayer
         return VLCPlayer(self._config, self._screen, self._bgimage)
 
     def _load_file_reader(self):
