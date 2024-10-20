@@ -21,7 +21,7 @@ class VLCPlayer:
         return self._temp_directory
 
     def _load_config(self, config):
-        self._vlc_args = config.get('omxplayer', 'args').split()
+        self._vlc_args = config.get('omxplayer', 'extra_args').split()
         self._show_titles = config.getboolean('omxplayer', 'show_titles')
         if self._show_titles:
             title_duration = config.getint('omxplayer', 'title_duration')
