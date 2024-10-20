@@ -21,10 +21,10 @@ class VLCPlayer:
         return self._temp_directory
 
     def _load_config(self, config):
-        self._vlc_args = config.get('vlc', 'args').split()
-        self._show_titles = config.getboolean('vlc', 'show_titles')
+        self._vlc_args = config.get('omxplayer', 'args').split()
+        self._show_titles = config.getboolean('omxplayer', 'show_titles')
         if self._show_titles:
-            title_duration = config.getint('vlc', 'title_duration')
+            title_duration = config.getint('omxplayer', 'title_duration')
             self._subtitle_header = f"{title_duration}\n"  # VLC subtitle header
 
     def supported_extensions(self):
@@ -34,7 +34,7 @@ class VLCPlayer:
         self.stop(3)  # Up to 3-second delay to stop the old player.
 
         # Assemble the list of arguments for VLC.
-        args = ['vlc']
+        args = ['omxplayer']
         args.extend(self._vlc_args)  # Add VLC arguments from config.
 
         if loop is None:
