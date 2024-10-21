@@ -1,3 +1,5 @@
+# This is not currently in a functional state. Porting to VLC is currently partially complete and not working 🙂
+
 # pi_video_looper
 An application to turn your Raspberry Pi into a dedicated looping video playback device.
 Can be used in art installations, fairs, theatre, events, infoscreens, advertisements etc...
